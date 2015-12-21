@@ -40,7 +40,12 @@ func (t Torrent) NewReader() (ret *Reader) {
 	ret = &Reader{
 		t:         &t,
 		readahead: 5 * 1024 * 1024,
+		reads:     make(map[*read]struct{}),
 	}
+	t.cl.mu.Lock()
+	defer t.cl.mu.Unlock()
+	t.torrent.readers[ret] = struct{}{}
+	t.torrent.prioritiesChanged(t.cl)
 	return
 }
 

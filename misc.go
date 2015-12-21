@@ -121,3 +121,19 @@ func validateInfo(info *metainfo.Info) error {
 	}
 	return nil
 }
+
+func regionPieces(off, len, pieceLength int64, numPieces int) (begin, end int) {
+	if off < 0 {
+		len += off
+		off = 0
+	}
+	if len <= 0 {
+		return
+	}
+	begin = int(off / pieceLength)
+	end = int((off + len + pieceLength - 1) / pieceLength)
+	if end > numPieces {
+		end = numPieces
+	}
+	return
+}

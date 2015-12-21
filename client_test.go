@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -108,7 +109,7 @@ func TestTorrentInitialState(t *testing.T) {
 	}
 	p := &tor.Pieces[0]
 	tor.pendAllChunkSpecs(0)
-	assert.EqualValues(t, 3, p.numPendingChunks())
+	assert.EqualValues(t, 3, p.numPendingChunks(tor, 0))
 	assert.EqualValues(t, chunkSpec{4, 1}, chunkIndexSpec(2, tor.pieceLength(0), tor.chunkSize))
 }
 
@@ -315,8 +316,15 @@ func TestClientTransfer(t *testing.T) {
 	}
 }
 
-// Check that after completing leeching, a leecher transitions to a seeding
-// correctly. Connected in a chain like so: Seeder <-> Leecher <-> LeecherLeecher.
+func httpStatus(path string, cl *Client) {
+	http.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		cl.WriteStatus(w)
+	})
+}
+
+// Check that after completing leeching, a leecher transitions to seeding
+// correctly. Connected in a chain like so: Seeder <-> Leecher <->
+// LeecherLeecher.
 func TestSeedAfterDownloading(t *testing.T) {
 	greetingTempDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(greetingTempDir)
@@ -325,12 +333,14 @@ func TestSeedAfterDownloading(t *testing.T) {
 	cfg.DataDir = greetingTempDir
 	seeder, err := NewClient(&cfg)
 	defer seeder.Close()
+	httpStatus("/seedAfterDownloading/seeder", seeder)
 	seeder.AddTorrentSpec(TorrentSpecFromMetaInfo(mi))
 	cfg.DataDir, err = ioutil.TempDir("", "")
 	require.NoError(t, err)
 	defer os.RemoveAll(cfg.DataDir)
 	leecher, _ := NewClient(&cfg)
 	defer leecher.Close()
+	httpStatus("/seedAfterDownloading/leecher", leecher)
 	cfg.Seed = false
 	cfg.TorrentDataOpener = nil
 	cfg.DataDir, err = ioutil.TempDir("", "")
@@ -338,6 +348,7 @@ func TestSeedAfterDownloading(t *testing.T) {
 	defer os.RemoveAll(cfg.DataDir)
 	leecherLeecher, _ := NewClient(&cfg)
 	defer leecherLeecher.Close()
+	httpStatus("/seedAfterDownloading/ll", leecherLeecher)
 	leecherGreeting, _, _ := leecher.AddTorrentSpec(func() (ret *TorrentSpec) {
 		ret = TorrentSpecFromMetaInfo(mi)
 		ret.ChunkSize = 2
@@ -361,6 +372,13 @@ func TestSeedAfterDownloading(t *testing.T) {
 		require.NoError(t, err)
 		require.EqualValues(t, testutil.GreetingFileContents, b)
 	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		leecherGreeting.DownloadAll()
+		leecher.WaitAll()
+	}()
+	time.Sleep(10 * time.Millisecond)
 	leecherGreeting.AddPeers([]Peer{
 		Peer{
 			IP:   missinggo.AddrIP(seeder.ListenAddr()),
@@ -371,12 +389,6 @@ func TestSeedAfterDownloading(t *testing.T) {
 			Port: missinggo.AddrPort(leecherLeecher.ListenAddr()),
 		},
 	})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		leecherGreeting.DownloadAll()
-		leecher.WaitAll()
-	}()
 	wg.Wait()
 }
 
@@ -503,6 +515,7 @@ func TestResponsive(t *testing.T) {
 	seeder, err := NewClient(&cfg)
 	require.Nil(t, err)
 	defer seeder.Close()
+	httpStatus("/responsive/seeder", seeder)
 	seeder.AddTorrentSpec(TorrentSpecFromMetaInfo(mi))
 	leecherDataDir, err := ioutil.TempDir("", "")
 	require.Nil(t, err)
@@ -512,26 +525,30 @@ func TestResponsive(t *testing.T) {
 	leecher, err := NewClient(&cfg)
 	require.Nil(t, err)
 	defer leecher.Close()
+	httpStatus("/responsive/leecher", leecher)
 	leecherTorrent, _, _ := leecher.AddTorrentSpec(func() (ret *TorrentSpec) {
 		ret = TorrentSpecFromMetaInfo(mi)
 		ret.ChunkSize = 2
 		return
 	}())
-	leecherTorrent.AddPeers([]Peer{
-		Peer{
-			IP:   missinggo.AddrIP(seeder.ListenAddr()),
-			Port: missinggo.AddrPort(seeder.ListenAddr()),
-		},
-	})
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		leecherTorrent.AddPeers([]Peer{
+			Peer{
+				IP:   missinggo.AddrIP(seeder.ListenAddr()),
+				Port: missinggo.AddrPort(seeder.ListenAddr()),
+			},
+		})
+	}()
 	reader := leecherTorrent.NewReader()
 	reader.SetReadahead(0)
 	reader.SetResponsive()
 	b := make([]byte, 2)
 	_, err = reader.ReadAt(b, 3)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.EqualValues(t, "lo", string(b))
 	n, err := reader.ReadAt(b, 11)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.EqualValues(t, 2, n)
 	assert.EqualValues(t, "d\n", string(b))
 }

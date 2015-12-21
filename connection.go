@@ -9,6 +9,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -60,6 +61,7 @@ type connection struct {
 	Interested       bool
 	Choked           bool
 	Requests         map[request]struct{}
+	sentHaves        []bool
 	requestsLowWater int
 	// Indexed by metadata piece, set to true if posted and pending a
 	// response.
@@ -104,40 +106,17 @@ func (cn *connection) localAddr() net.Addr {
 	return cn.conn.LocalAddr()
 }
 
+func (cn *connection) unpendPiece(piece int, t *torrent) {
+	cn.pieceRequestOrder.DeletePiece(piece)
+}
+
 // Adjust piece position in the request order for this connection based on the
-// given piece priority.
-func (cn *connection) pendPiece(piece int, priority piecePriority, t *torrent) {
-	if priority == PiecePriorityNone {
-		cn.pieceRequestOrder.DeletePiece(piece)
-		return
-	}
+// piece priority.
+func (cn *connection) pendPiece(piece int, t *torrent) {
 	if cn.piecePriorities == nil {
 		cn.piecePriorities = t.newConnPiecePriorities()
 	}
-	pp := cn.piecePriorities[piece]
-	// Priority regions not to scale. Within each region, piece is randomized
-	// according to connection.
-
-	// <-request first -- last->
-	// [ Now         ]
-	//  [ Next       ]
-	//   [ Readahead ]
-	//                [ Normal ]
-	key := func() int {
-		switch priority {
-		case PiecePriorityNow:
-			return -3*len(cn.piecePriorities) + 3*pp
-		case PiecePriorityNext:
-			return -2*len(cn.piecePriorities) + 2*pp
-		case PiecePriorityReadahead:
-			return -len(cn.piecePriorities) + pp
-		case PiecePriorityNormal:
-			return pp
-		default:
-			panic(priority)
-		}
-	}()
-	cn.pieceRequestOrder.SetPiece(piece, key)
+	cn.pieceRequestOrder.SetPiece(piece, cn.piecePriorities[piece])
 }
 
 func (cn *connection) supportsExtension(ext string) bool {
@@ -344,6 +323,7 @@ func (c *connection) requestedMetadataPiece(index int) bool {
 
 // Returns true if more requests can be sent.
 func (c *connection) Request(chunk request) bool {
+	log.Println("request", chunk)
 	if len(c.Requests) >= c.PeerMaxRequests {
 		return false
 	}
@@ -550,4 +530,18 @@ func (conn *connection) writeOptimizer(keepAliveDelay time.Duration) {
 			return
 		}
 	}
+}
+
+func (c *connection) Have(piece int) {
+	for piece >= len(c.sentHaves) {
+		c.sentHaves = append(c.sentHaves, false)
+	}
+	if c.sentHaves[piece] {
+		return
+	}
+	c.Post(pp.Message{
+		Type:  pp.Have,
+		Index: pp.Integer(piece),
+	})
+	c.sentHaves[piece] = true
 }

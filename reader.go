@@ -3,7 +3,9 @@ package torrent
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
+	"sync"
 )
 
 // Accesses torrent data via a client.
@@ -12,6 +14,14 @@ type Reader struct {
 	pos        int64
 	responsive bool
 	readahead  int64
+
+	mu    sync.Mutex
+	reads map[*read]struct{}
+}
+
+type read struct {
+	off int64
+	len int
 }
 
 var _ io.ReadCloser = &Reader{}
@@ -28,53 +38,22 @@ func (r *Reader) SetReadahead(readahead int64) {
 	r.readahead = readahead
 }
 
-func (r *Reader) raisePriorities(off int64, n int) {
-	if r.responsive {
-		r.t.cl.addUrgentRequests(r.t.torrent, off, n)
-	}
-	if !r.responsive || r.readahead != 0 {
-		r.t.cl.readRaisePiecePriorities(r.t.torrent, off, int64(n)+r.readahead)
-	}
-}
-
 func (r *Reader) readable(off int64) (ret bool) {
-	// log.Println("readable", off)
-	// defer func() {
-	// 	log.Println("readable", ret)
-	// }()
+	log.Println("readable", off)
+	defer func() {
+		log.Println("readable", ret)
+	}()
 	if r.t.isClosed() {
 		return true
 	}
 	req, ok := r.t.offsetRequest(off)
 	if !ok {
-		panic(off)
+		return true
 	}
 	if r.responsive {
 		return r.t.haveChunk(req)
 	}
 	return r.t.pieceComplete(int(req.Index))
-}
-
-// How many bytes are available to read. Max is the most we could require.
-func (r *Reader) available(off, max int64) (ret int64) {
-	for max > 0 {
-		req, ok := r.t.offsetRequest(off)
-		if !ok {
-			break
-		}
-		if !r.t.haveChunk(req) {
-			break
-		}
-		len1 := int64(req.Length) - (off - r.t.requestOffset(req))
-		max -= len1
-		ret += len1
-		off += len1
-	}
-	// Ensure that ret hasn't exceeded our original max.
-	if max < 0 {
-		ret += max
-	}
-	return
 }
 
 func (r *Reader) waitReadable(off int64) {
@@ -88,7 +67,11 @@ func (r *Reader) ReadAt(b []byte, off int64) (n int, err error) {
 		n += n1
 		b = b[n1:]
 		off += int64(n1)
-		if err != nil || len(b) == 0 || n1 == 0 {
+		if len(b) == 0 {
+			err = nil
+			return
+		}
+		if err != io.ErrUnexpectedEOF {
 			return
 		}
 	}
@@ -102,58 +85,41 @@ func (r *Reader) Read(b []byte) (n int, err error) {
 
 // Must only return EOF at the end of the torrent.
 func (r *Reader) readAt(b []byte, pos int64) (n int, err error) {
-	// defer func() {
-	// 	log.Println(pos, n, err)
-	// }()
-	maxLen := r.t.torrent.Info.TotalLength() - pos
-	if maxLen <= 0 {
-		err = io.EOF
-		return
+	rd := &read{
+		off: pos,
+		len: len(b),
 	}
-	if int64(len(b)) > maxLen {
-		b = b[:maxLen]
-	}
-again:
-	r.t.cl.mu.Lock()
-	r.raisePriorities(pos, len(b))
-	for !r.readable(pos) {
-		r.raisePriorities(pos, len(b))
-		r.waitReadable(pos)
-	}
-	avail := r.available(pos, int64(len(b)))
-	// log.Println("available", avail)
-	r.t.cl.mu.Unlock()
-	b1 := b[:avail]
-	pi := int(pos / r.t.Info().PieceLength)
-	tp := &r.t.torrent.Pieces[pi]
-	ip := r.t.Info().Piece(pi)
-	po := pos % ip.Length()
-	if int64(len(b1)) > ip.Length()-po {
-		b1 = b1[:ip.Length()-po]
-	}
-	tp.pendingWritesMutex.Lock()
-	for tp.pendingWrites != 0 {
-		tp.noPendingWrites.Wait()
-	}
-	tp.pendingWritesMutex.Unlock()
-	n, err = dataReadAt(r.t.data, b1, pos)
-	if n != 0 {
-		err = nil
-		return
-	}
-	if r.t.isClosed() {
-		if err == nil {
-			err = errors.New("torrent closed")
+	r.reads[rd] = struct{}{}
+	defer func() {
+		delete(r.reads, rd)
+	}()
+	for {
+		r.t.cl.mu.Lock()
+		for !r.readable(pos) {
+			r.tickleClient()
+			r.waitReadable(pos)
 		}
-		return
-	}
-	if err == io.ErrUnexpectedEOF {
-		goto again
+		if r.t.isClosed() {
+			r.t.cl.mu.Unlock()
+			err = errors.New("torrent closed")
+			return
+		}
+		r.t.cl.mu.Unlock()
+		n, err = r.t.torrent.readAt(b, pos)
+		log.Println(n, err)
+		if n != 0 {
+			err = nil
+			return
+		}
+		if err != nil {
+			return
+		}
 	}
 	return
 }
 
 func (r *Reader) Close() error {
+	r.t.torrent.deleteReaderUnlocked(r, r.t.cl)
 	r.t = nil
 	return nil
 }
@@ -163,12 +129,22 @@ func (r *Reader) Seek(off int64, whence int) (ret int64, err error) {
 	case os.SEEK_SET:
 		r.pos = off
 	case os.SEEK_CUR:
+		if off == 0 {
+			// Avoid creating a race condition.
+			ret = r.pos
+			return
+		}
 		r.pos += off
 	case os.SEEK_END:
 		r.pos = r.t.torrent.Info.TotalLength() + off
 	default:
 		err = errors.New("bad whence")
 	}
+	r.tickleClient()
 	ret = r.pos
 	return
+}
+
+func (r *Reader) tickleClient() {
+	r.t.torrent.prioritiesChanged(r.t.cl)
 }
