@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"os"
 	"sort"
 	"sync"
 	"time"
@@ -822,18 +821,14 @@ func (t *torrent) readerBlockingRequests(f func(req request) bool) (again bool) 
 		return true
 	}
 	for r := range t.readers {
+		r.readsMu.Lock()
 		for rd := range r.reads {
 			if !_f(rd.off, int64(rd.len)) {
+				r.readsMu.Unlock()
 				return false
 			}
 		}
-		off, err := r.Seek(0, os.SEEK_CUR)
-		if err != nil {
-			continue
-		}
-		if !_f(off, 1) {
-			return false
-		}
+		r.readsMu.Unlock()
 	}
 	return true
 }
@@ -894,19 +889,15 @@ func (t *torrent) prioritiesChanged(cl *Client) {
 
 func (t *torrent) forReaderWantedPieces(f func(begin, end int) (again bool)) {
 	for r := range t.readers {
-		off, err := r.Seek(0, os.SEEK_CUR)
-		if err == nil {
-			begin, end := t.regionPieces(off, off+r.readahead)
-			if !f(begin, end) {
-				return
-			}
-		}
+		r.readsMu.Lock()
 		for read := range r.reads {
 			begin, end := t.regionPieces(read.off, read.off+int64(read.len)+r.readahead)
 			if !f(begin, end) {
+				r.readsMu.Unlock()
 				return
 			}
 		}
+		r.readsMu.Unlock()
 	}
 }
 

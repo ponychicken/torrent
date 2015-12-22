@@ -3,20 +3,22 @@ package torrent
 import (
 	"errors"
 	"io"
-	"log"
 	"os"
-	"sync"
+
+	"github.com/anacrolix/sync"
 )
 
 // Accesses torrent data via a client.
 type Reader struct {
 	t          *Torrent
-	pos        int64
 	responsive bool
 	readahead  int64
 
-	mu    sync.Mutex
-	reads map[*read]struct{}
+	readsMu sync.Mutex
+	reads   map[*read]struct{}
+
+	posMu sync.Mutex
+	pos   int64
 }
 
 type read struct {
@@ -78,6 +80,8 @@ func (r *Reader) ReadAt(b []byte, off int64) (n int, err error) {
 
 func (r *Reader) Read(b []byte) (n int, err error) {
 	// defer func() { log.Println("reader read", b, n, err) }()
+	r.posMu.Lock()
+	defer r.posMu.Unlock()
 	for {
 		n, err = r.readAt(b, r.pos)
 		r.pos += int64(n)
@@ -97,9 +101,13 @@ func (r *Reader) readAt(b []byte, pos int64) (n int, err error) {
 		off: pos,
 		len: len(b),
 	}
+	r.readsMu.Lock()
 	r.reads[rd] = struct{}{}
+	r.readsMu.Unlock()
 	defer func() {
+		r.readsMu.Lock()
 		delete(r.reads, rd)
+		r.readsMu.Unlock()
 	}()
 	for {
 		r.t.cl.mu.Lock()
@@ -132,15 +140,12 @@ func (r *Reader) Close() error {
 }
 
 func (r *Reader) Seek(off int64, whence int) (ret int64, err error) {
+	r.posMu.Lock()
+	defer r.posMu.Unlock()
 	switch whence {
 	case os.SEEK_SET:
 		r.pos = off
 	case os.SEEK_CUR:
-		if off == 0 {
-			// Avoid creating a race condition.
-			ret = r.pos
-			return
-		}
 		r.pos += off
 	case os.SEEK_END:
 		r.pos = r.t.torrent.Info.TotalLength() + off
