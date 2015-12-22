@@ -20,8 +20,9 @@ func TestCancelRequestOptimized(t *testing.T) {
 	if len(c.Requests) != 0 {
 		t.FailNow()
 	}
-	// Keepalive timeout of 0 works because I'm just that good.
-	go c.writeOptimizer(0 * time.Millisecond)
+	// Make the keepalive come through after the interested message has had
+	// time to go through.
+	go c.writeOptimizer(1 * time.Millisecond)
 	c.Request(newRequest(1, 2, 3))
 	if len(c.Requests) != 1 {
 		t.Fatal("request was not posted")
