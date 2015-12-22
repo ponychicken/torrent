@@ -86,6 +86,7 @@ func super(child interface{}) (parent interface{}, ok bool) {
 // Return the request that would include the given offset into the torrent data.
 func torrentOffsetRequest(torrentLength, pieceSize, chunkSize, offset int64) (
 	r request, ok bool) {
+	// defer func() { log.Println("torrent offset request", torrentLength, pieceSize, chunkSize, offset, r, ok) }()
 	if offset < 0 || offset >= torrentLength {
 		return
 	}

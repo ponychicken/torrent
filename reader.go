@@ -39,10 +39,8 @@ func (r *Reader) SetReadahead(readahead int64) {
 }
 
 func (r *Reader) readable(off int64) (ret bool) {
-	log.Println("readable", off)
-	defer func() {
-		log.Println("readable", ret)
-	}()
+	// log.Println("readable", off)
+	// defer func() { log.Println("readable", ret) }()
 	if r.t.isClosed() {
 		return true
 	}
@@ -61,6 +59,7 @@ func (r *Reader) waitReadable(off int64) {
 }
 
 func (r *Reader) ReadAt(b []byte, off int64) (n int, err error) {
+	// defer func() { log.Println("reader read", b, off, n, err) }()
 	for {
 		var n1 int
 		n1, err = r.readAt(b, off)
@@ -78,6 +77,7 @@ func (r *Reader) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 func (r *Reader) Read(b []byte) (n int, err error) {
+	// defer func() { log.Println("reader read", b, n, err) }()
 	for {
 		n, err = r.readAt(b, r.pos)
 		r.pos += int64(n)
@@ -114,7 +114,6 @@ func (r *Reader) readAt(b []byte, pos int64) (n int, err error) {
 		}
 		r.t.cl.mu.Unlock()
 		n, err = r.t.torrent.readAt(b, pos)
-		log.Println(n, err)
 		if n != 0 {
 			err = nil
 			return

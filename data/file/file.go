@@ -2,7 +2,6 @@ package file
 
 import (
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -31,10 +30,8 @@ func (me data) PieceCompleted(piece int) error {
 }
 
 func (me data) ReadAt(p []byte, off int64) (n int, err error) {
-	log.Println(p, off)
-	defer func() {
-		log.Println(n, err)
-	}()
+	// log.Println(p, off)
+	// defer func() { log.Println(n, err) }()
 	for _, fi := range me.info.UpvertedFiles() {
 		if off >= fi.Length {
 			off -= fi.Length
@@ -49,10 +46,8 @@ func (me data) ReadAt(p []byte, off int64) (n int, err error) {
 		if err != nil {
 			return
 		}
-		log.Println(n1, off)
 		n1, err = f.ReadAt(p[:n1], off)
 		n += n1
-		log.Println(n1, err)
 		f.Close()
 		if err != nil {
 			return

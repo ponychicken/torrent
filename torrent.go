@@ -116,7 +116,8 @@ func (t *torrent) newConnPiecePriorities() []int {
 	return rand.Perm(t.numPieces())
 }
 
-func (t *torrent) pieceComplete(piece int) bool {
+func (t *torrent) pieceComplete(piece int) (ret bool) {
+	// defer func() { log.Println("piece complete", piece, ret) }()
 	if piece < 0 {
 		return true
 	}
@@ -580,6 +581,7 @@ func (t *torrent) requestOffset(r request) int64 {
 // Return the request that would include the given offset into the torrent
 // data. Returns !ok if there is no such request.
 func (t *torrent) offsetRequest(off int64) (req request, ok bool) {
+	// defer func() { log.Println("offset request", off, req, ok) }()
 	return torrentOffsetRequest(t.Length(), t.Info.PieceLength, int64(t.chunkSize), off)
 }
 
@@ -701,7 +703,8 @@ func (t *torrent) havePiece(index int) bool {
 	return t.haveInfo() && t.pieceComplete(index)
 }
 
-func (t *torrent) haveChunk(r request) bool {
+func (t *torrent) haveChunk(r request) (ret bool) {
+	// defer func() { log.Println("have chunk", r, ret) }()
 	if !t.haveInfo() {
 		return false
 	}
@@ -732,9 +735,7 @@ func (t *torrent) wantChunk(r request) bool {
 
 // TODO: This should be called wantPieceIndex.
 func (t *torrent) wantPiece(index int) (ret bool) {
-	defer func() {
-		log.Println("want piece", index, ret)
-	}()
+	// defer func() { log.Println("want piece", index, ret) }()
 	if !t.haveInfo() {
 		return false
 	}
@@ -910,9 +911,7 @@ func (t *torrent) forReaderWantedPieces(f func(begin, end int) (again bool)) {
 }
 
 func (t *torrent) regionPieces(off, len int64) (begin, end int) {
-	defer func() {
-		log.Println("region pieces", off, len, begin, end)
-	}()
+	// defer func() { log.Println("region pieces", off, len, begin, end) }()
 	return regionPieces(off, len, int64(t.usualPieceSize()), t.numPieces())
 }
 
