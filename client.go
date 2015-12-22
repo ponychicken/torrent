@@ -115,6 +115,7 @@ func (cl *Client) queuePieceCheck(t *torrent, pieceIndex int) {
 		return
 	}
 	piece.QueuedForHash = true
+	piece.DirtyChunks = nil
 	t.publishPieceChange(pieceIndex)
 	go cl.verifyPiece(t, pieceIndex)
 }

@@ -803,19 +803,26 @@ func (t *torrent) readersAreBlockedOnReads() (ret bool) {
 }
 
 func (t *torrent) readerBlockingRequests(f func(req request) bool) (again bool) {
-	_f := func(off int64) (again bool) {
-		req, ok := t.offsetRequest(off)
-		if !ok {
-			return true
+	_f := func(off, len int64) (again bool) {
+		for len > 0 {
+			req, ok := t.offsetRequest(off)
+			if !ok {
+				break
+			}
+			if !t.haveChunk(req) {
+				if !f(req) {
+					return false
+				}
+			}
+			nextOff := t.requestOffset(req) + int64(req.Length)
+			len -= nextOff - off
+			off = nextOff
 		}
-		if t.haveChunk(req) {
-			return true
-		}
-		return f(req)
+		return true
 	}
 	for r := range t.readers {
 		for rd := range r.reads {
-			if !_f(rd.off) {
+			if !_f(rd.off, int64(rd.len)) {
 				return false
 			}
 		}
@@ -823,7 +830,7 @@ func (t *torrent) readerBlockingRequests(f func(req request) bool) (again bool) 
 		if err != nil {
 			continue
 		}
-		if !_f(off) {
+		if !_f(off, 1) {
 			return false
 		}
 	}

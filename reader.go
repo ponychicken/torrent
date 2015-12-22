@@ -78,8 +78,16 @@ func (r *Reader) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 func (r *Reader) Read(b []byte) (n int, err error) {
-	n, err = r.readAt(b, r.pos)
-	r.pos += int64(n)
+	for {
+		n, err = r.readAt(b, r.pos)
+		r.pos += int64(n)
+		if n == 0 {
+			break
+		}
+		if err != io.ErrUnexpectedEOF {
+			break
+		}
+	}
 	return
 }
 
