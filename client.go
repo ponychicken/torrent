@@ -2257,7 +2257,7 @@ newAnnounce:
 				numTrackersTried++
 				err := cl.announceTorrentSingleTracker(tr, &req, t)
 				if err != nil {
-					continue
+					log.Print(err);
 				}
 				// Float the successful announce to the top of the tier. If
 				// the trackers list has been changed, we'll be modifying an
